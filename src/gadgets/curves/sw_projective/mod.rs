@@ -7,12 +7,15 @@
 The code below is based on the following paper: https://eprint.iacr.org/2015/1060.pdf.
 */
 
+use std::{sync::Arc, marker::PhantomData};
 use super::{
-    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable,
-    Derivative, SmallField,
+    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable, Derivative, SmallField
 };
 use crate::cs::traits::cs::ConstraintSystem;
-use pairing::GenericCurveAffine;
+use pairing::{GenericCurveAffine, ff::{Field, PrimeField}};
+
+/// Type alias for representing the affine point pair.
+pub type AffinePoint<F> = (F, F);
 
 /// This is a struct for representing a point in the SW projective coordinates.
 #[derive(Derivative)]
@@ -22,12 +25,12 @@ where
     F: SmallField,
     GC: GenericCurveAffine,
     NF: NonNativeField<F, GC::Base>,
-    GC::Base: pairing::ff::PrimeField,
+    GC::Base: PrimeField,
 {
     pub x: NF,
     pub y: NF,
     pub z: NF,
-    pub _marker: std::marker::PhantomData<(F, GC)>,
+    pub _marker: PhantomData<(F, GC)>,
 }
 
 impl<F, GC, NF> SWProjectivePoint<F, GC, NF>
@@ -35,15 +38,14 @@ where
     F: SmallField,
     GC: GenericCurveAffine,
     NF: NonNativeField<F, GC::Base>,
-    GC::Base: pairing::ff::PrimeField,
+    GC::Base: PrimeField,
 {
-    /// Initializes a new point in the SW projective coordinates.
-    pub fn from_xy_unchecked<CS>(cs: &mut CS, x: NF, y: NF) -> Self
+    /// Initializes a new point in the SW projective coordinates. 
+    /// The point is given as `(x : y : 1)`.
+    pub fn from_xy_unchecked<CS>(cs: &mut CS, (x, y): AffinePoint<NF>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
-
         let x_params = x.get_params();
         let z = NF::allocated_constant(cs, GC::Base::one(), x_params);
 
@@ -51,17 +53,15 @@ where
             x,
             y,
             z,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    /// Initializes the zero point of the curve.
-    pub fn zero<CS>(cs: &mut CS, params: &std::sync::Arc<NF::Params>) -> Self
+    /// Initializes the zero point of the curve, which is represented by a point `(0 : 1 : 0)`.
+    pub fn zero<CS>(cs: &mut CS, params: &Arc<NF::Params>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
-
         let x = NF::allocated_constant(cs, GC::Base::zero(), params);
         let y = NF::allocated_constant(cs, GC::Base::one(), params);
         let z = NF::allocated_constant(cs, GC::Base::zero(), params);
@@ -70,16 +70,17 @@ where
             x,
             y,
             z,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    /// Doubles the point in the SW projective coordinates.
+    /// Doubles the point in the SW projective coordinates, that is, finds the point `2 * self`.
+    /// This is a more optimized version of the generic double function. 
+    /// If the `a` coefficient of the curve is non-zero, the generic double function is called.
     pub fn double<CS>(&mut self, cs: &mut CS) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
         if !GC::a_coeff().is_zero() {
             return self.generic_double(cs);
         }
@@ -144,16 +145,16 @@ where
             x: x3,
             y: y3,
             z: z3,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    /// Doubling the point
+    /// Doubling the point generically, which is a bit slower compared to the optimized version.
+    /// This function is called when the `a` coefficient of the curve is non-zero.
     fn generic_double<CS>(&mut self, cs: &mut CS) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
         let params = self.x.get_params().clone();
 
         let curve_b = GC::b_coeff();
@@ -241,44 +242,42 @@ where
         // z3 = z3 + z3
         let z3 = z3.double(cs);
 
-        let new = Self {
+        Self {
             x: x3,
             y: y3,
             z: z3,
-            _marker: std::marker::PhantomData,
-        };
-
-        new
+            _marker: PhantomData,
+        }
     }
 
+    /// Negates the point in the SW projective coordinates.
+    /// The negation of the point `(x : y : z)` is `(x : -y : z)`.
     pub fn negated<CS>(&mut self, cs: &mut CS) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         let y_negated = self.y.negated(cs);
 
-        let new = Self {
+        Self {
             x: self.x.clone(),
             y: y_negated,
             z: self.z.clone(),
-            _marker: std::marker::PhantomData,
-        };
-
-        new
+            _marker: PhantomData,
+        }
     }
 
+    /// Adds (subtracts) another affine-represented point
     fn add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_xy: &mut (NF, NF),
+        other_point: &mut AffinePoint<NF>,
         is_subtraction: bool,
     ) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
         if GC::a_coeff().is_zero() == false {
-            return self.generic_add_sub_mixed_impl(cs, other_xy, is_subtraction);
+            return self.generic_add_sub_mixed_impl(cs, other_point, is_subtraction);
         }
 
         let params = self.x.get_params().clone();
@@ -303,8 +302,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = other_xy.1.clone();
-        let x2 = &mut other_xy.0;
+        let mut y2_local: NF = other_point.1.clone();
+        let x2 = &mut other_point.0;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
         }
@@ -363,26 +362,24 @@ where
         let mut z3 = z3.mul(cs, &mut t4);
         let z3 = z3.add(cs, &mut t0);
 
-        let new = Self {
+        Self {
             x: x3,
             y: y3,
             z: z3,
-            _marker: std::marker::PhantomData,
-        };
-
-        new
+            _marker: PhantomData,
+        }
     }
 
+    /// Adds (subtracts) another point in the affine coordinates generically.
     fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_xy: &mut (NF, NF),
+        other_point: &mut AffinePoint<NF>,
         is_subtraction: bool,
     ) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
         let params = self.x.get_params().clone();
 
         let curve_b = GC::b_coeff();
@@ -397,8 +394,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = other_xy.1.clone();
-        let x2 = &mut other_xy.0;
+        let mut y2_local: NF = other_point.1.clone();
+        let x2 = &mut other_point.0;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
         }
@@ -481,55 +478,56 @@ where
         // z3 = z3 + t0
         let z3 = z3.add(cs, &mut t0);
 
-        let new = Self {
+        Self {
             x: x3,
             y: y3,
             z: z3,
-            _marker: std::marker::PhantomData,
-        };
-
-        new
+            _marker: PhantomData,
+        }
     }
 
-    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut (NF, NF)) -> Self
+    /// Add the point in affine coordinates to the point in the projective coordinates.
+    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut AffinePoint<NF>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         self.add_sub_mixed_impl(cs, other_xy, false)
     }
 
-    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut (NF, NF)) -> Self
+    /// Subtracts a point in the affine coordinates from the point in the projective coordinates.
+    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut AffinePoint<NF>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         self.add_sub_mixed_impl(cs, other_xy, true)
     }
 
+    /// This function is used to convert the point to the affine coordinates.
+    /// If the point is at infinity, it returns the default point.
     pub fn convert_to_affine_or_default<CS>(
         &mut self,
         cs: &mut CS,
         default: GC,
-    ) -> ((NF, NF), Boolean<F>)
+    ) -> (AffinePoint<NF>, Boolean<F>)
     where
         CS: ConstraintSystem<F>,
     {
-        use pairing::ff::Field;
-        let params = self.x.get_params().clone();
-        let is_point_at_infty = NF::is_zero(&mut self.z, cs);
+        let x_params = self.x.get_params().clone();
+        let at_infinity = NF::is_zero(&mut self.z, cs);
 
-        let one_nn = NF::allocated_constant(cs, GC::Base::one(), &params);
-        let mut safe_z = NF::conditionally_select(cs, is_point_at_infty, &one_nn, &self.z);
+        let one_nf = NF::allocated_constant(cs, GC::Base::one(), &x_params);
+        let mut safe_z = NF::conditionally_select(cs, at_infinity, &one_nf, &self.z);
         let x_for_safe_z = self.x.div_unchecked(cs, &mut safe_z);
         let y_for_safe_z = self.y.div_unchecked(cs, &mut safe_z);
 
         let (default_x, default_y) = default.into_xy_unchecked();
-        let default_x = NF::allocated_constant(cs, default_x, &params);
-        let default_y = NF::allocated_constant(cs, default_y, &params);
+        let default_x = NF::allocated_constant(cs, default_x, &x_params);
+        let default_y = NF::allocated_constant(cs, default_y, &x_params);
 
-        let x = NF::conditionally_select(cs, is_point_at_infty, &default_x, &x_for_safe_z);
-        let y = NF::conditionally_select(cs, is_point_at_infty, &default_y, &y_for_safe_z);
+        let x = NF::conditionally_select(cs, at_infinity, &default_x, &x_for_safe_z);
+        let y = NF::conditionally_select(cs, at_infinity, &default_y, &y_for_safe_z);
 
-        ((x, y), is_point_at_infty)
+        ((x, y), at_infinity)
     }
 }
 
@@ -538,14 +536,14 @@ where
     F: SmallField,
     GC: GenericCurveAffine,
     NF: NonNativeField<F, GC::Base>,
-    GC::Base: pairing::ff::PrimeField,
+    GC::Base: PrimeField,
 {
-    fn conditionally_select<CS: ConstraintSystem<F>>(
-        cs: &mut CS,
-        flag: Boolean<F>,
-        a: &Self,
-        b: &Self,
-    ) -> Self {
+    /// Given constraint system `cs`, a boolean `flag`, and two points `a` and `b`, this function
+    /// returns a point that is equal to `a` if `flag` is true, and equal to `b` otherwise.
+    fn conditionally_select<CS>(cs: &mut CS, flag: Boolean<F>, a: &Self, b: &Self) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         let x = NF::conditionally_select(cs, flag, &a.x, &b.x);
         let y = NF::conditionally_select(cs, flag, &a.y, &b.y);
         let z = NF::conditionally_select(cs, flag, &a.z, &b.z);
@@ -554,7 +552,7 @@ where
             x,
             y,
             z,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 }
