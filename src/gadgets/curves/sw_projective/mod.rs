@@ -7,12 +7,16 @@
 The code below is based on the following paper: https://eprint.iacr.org/2015/1060.pdf.
 */
 
-use std::{sync::Arc, marker::PhantomData};
 use super::{
-    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable, Derivative, SmallField
+    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable,
+    Derivative, SmallField,
 };
 use crate::cs::traits::cs::ConstraintSystem;
-use pairing::{GenericCurveAffine, ff::{Field, PrimeField}};
+use pairing::{
+    ff::{Field, PrimeField},
+    GenericCurveAffine,
+};
+use std::{marker::PhantomData, sync::Arc};
 
 /// Type alias for representing the affine point pair.
 pub type AffinePoint<F> = (F, F);
@@ -40,7 +44,7 @@ where
     NF: NonNativeField<F, GC::Base>,
     GC::Base: PrimeField,
 {
-    /// Initializes a new point in the SW projective coordinates. 
+    /// Initializes a new point in the SW projective coordinates.
     /// The point is given as `(x : y : 1)`.
     pub fn from_xy_unchecked<CS>(cs: &mut CS, (x, y): AffinePoint<NF>) -> Self
     where
@@ -75,7 +79,7 @@ where
     }
 
     /// Doubles the point in the SW projective coordinates, that is, finds the point `2 * self`.
-    /// This is a more optimized version of the generic double function. 
+    /// This is a more optimized version of the generic double function.
     /// If the `a` coefficient of the curve is non-zero, the generic double function is called.
     pub fn double<CS>(&mut self, cs: &mut CS) -> Self
     where
@@ -371,6 +375,7 @@ where
     }
 
     /// Adds (subtracts) another point in the affine coordinates generically.
+    /// To specify add/sub operation, the `is_subtraction` parameter is used.
     fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,

@@ -1,22 +1,22 @@
-use std::sync::Arc;
-
-use pairing::GenericCurveAffine;
-
+use super::*;
 use crate::{
     cs::traits::cs::ConstraintSystem,
     gadgets::{boolean::Boolean, non_native_field::traits::NonNativeField},
+    pairing::{self, ff::{Field, PrimeField}, GenericCurveAffine},
 };
+use std::{marker::PhantomData, sync::Arc};
 
-use super::*;
-
-pub struct ZeroableAffinePoint<F: SmallField, C: GenericCurveAffine, NN: NonNativeField<F, C::Base>>
+pub struct ZeroableAffinePoint<F, GC, NF>
 where
-    C::Base: pairing::ff::PrimeField,
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: pairing::ff::PrimeField,
 {
-    pub x: NN,
-    pub y: NN,
+    pub x: NF,
+    pub y: NF,
     pub is_zero: Boolean<F>,
-    pub _marker: std::marker::PhantomData<C>,
+    pub _marker: PhantomData<GC>,
 }
 
 // we only need add/sub/double/negate Mul is implemented by naive double-and-add, and we can have special
@@ -24,34 +24,47 @@ where
 
 // We also create decompress function for convenience
 
-impl<F: SmallField, C: GenericCurveAffine, NN: NonNativeField<F, C::Base>>
-    ZeroableAffinePoint<F, C, NN>
+impl<F, GC, NF> ZeroableAffinePoint<F, GC, NF>
 where
-    C::Base: pairing::ff::PrimeField,
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: PrimeField,
 {
-    pub fn zero_point<CS: ConstraintSystem<F>>(cs: &mut CS, params: &Arc<NN::Params>) -> Self {
-        use pairing::ff::Field;
-        let zero_nn = NN::allocated_constant(cs, C::Base::zero(), params);
+    pub fn zero_point<CS>(cs: &mut CS, params: &Arc<NF::Params>) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        let zero_nn = NF::allocated_constant(cs, GC::Base::zero(), params);
         let boolean_true = Boolean::allocated_constant(cs, true);
 
         Self {
             x: zero_nn.clone(),
             y: zero_nn,
             is_zero: boolean_true,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    pub fn same_x<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS, other: &mut Self) -> Boolean<F> {
+    pub fn same_x<CS>(&mut self, cs: &mut CS, other: &mut Self) -> Boolean<F>
+    where
+        CS: ConstraintSystem<F>,
+    {
         self.x.equals(cs, &mut other.x)
     }
 
-    pub fn same_y<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS, other: &mut Self) -> Boolean<F> {
+    pub fn same_y<CS>(&mut self, cs: &mut CS, other: &mut Self) -> Boolean<F>
+    where
+        CS: ConstraintSystem<F>,
+    {
         self.y.equals(cs, &mut other.y)
     }
 
     #[allow(unused_assignments)]
-    pub fn add_unequal<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS, other: &mut Self) -> Self {
+    pub fn add_unequal<CS>(&mut self, cs: &mut CS, other: &mut Self) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         let same_x = self.same_x(cs, other);
         let boolean_false = Boolean::allocated_constant(cs, false);
         Boolean::enforce_equal(cs, &same_x, &boolean_false);
