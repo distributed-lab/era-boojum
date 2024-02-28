@@ -1,36 +1,51 @@
-use super::*;
+/*! Package for implementing the SW projective coordinates operations, including:
+ - Point addition
+ - Point doubling
+ - Point negation
+ - Point subtraction
 
-use crate::gadgets::traits::selectable::Selectable;
-use crate::{
-    cs::traits::cs::ConstraintSystem,
-    gadgets::{boolean::Boolean, non_native_field::traits::NonNativeField},
+The code below is based on the following paper: https://eprint.iacr.org/2015/1060.pdf.
+*/
+
+use super::{
+    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable,
+    Derivative, SmallField,
 };
+use crate::cs::traits::cs::ConstraintSystem;
 use pairing::GenericCurveAffine;
 
-// https://eprint.iacr.org/2015/1060.pdf
-
+/// This is a struct for representing a point in the SW projective coordinates.
 #[derive(Derivative)]
 #[derivative(Clone, Debug)]
-pub struct SWProjectivePoint<F: SmallField, C: GenericCurveAffine, NN: NonNativeField<F, C::Base>>
+pub struct SWProjectivePoint<F, GC, NF>
 where
-    C::Base: pairing::ff::PrimeField,
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: pairing::ff::PrimeField,
 {
-    pub x: NN,
-    pub y: NN,
-    pub z: NN,
-    pub _marker: std::marker::PhantomData<(F, C)>,
+    pub x: NF,
+    pub y: NF,
+    pub z: NF,
+    pub _marker: std::marker::PhantomData<(F, GC)>,
 }
 
-impl<F: SmallField, C: GenericCurveAffine, NN: NonNativeField<F, C::Base>>
-    SWProjectivePoint<F, C, NN>
+impl<F, GC, NF> SWProjectivePoint<F, GC, NF>
 where
-    C::Base: pairing::ff::PrimeField,
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: pairing::ff::PrimeField,
 {
-    pub fn from_xy_unchecked<CS: ConstraintSystem<F>>(cs: &mut CS, x: NN, y: NN) -> Self {
+    /// Initializes a new point in the SW projective coordinates.
+    pub fn from_xy_unchecked<CS>(cs: &mut CS, x: NF, y: NF) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
 
-        let params = x.get_params();
-        let z = NN::allocated_constant(cs, C::Base::one(), params);
+        let x_params = x.get_params();
+        let z = NF::allocated_constant(cs, GC::Base::one(), x_params);
 
         Self {
             x,
@@ -40,12 +55,16 @@ where
         }
     }
 
-    pub fn zero<CS: ConstraintSystem<F>>(cs: &mut CS, params: &std::sync::Arc<NN::Params>) -> Self {
+    /// Initializes the zero point of the curve.
+    pub fn zero<CS>(cs: &mut CS, params: &std::sync::Arc<NF::Params>) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
 
-        let x = NN::allocated_constant(cs, C::Base::zero(), params);
-        let y = NN::allocated_constant(cs, C::Base::one(), params);
-        let z = NN::allocated_constant(cs, C::Base::zero(), params);
+        let x = NF::allocated_constant(cs, GC::Base::zero(), params);
+        let y = NF::allocated_constant(cs, GC::Base::one(), params);
+        let z = NF::allocated_constant(cs, GC::Base::zero(), params);
 
         Self {
             x,
@@ -55,30 +74,40 @@ where
         }
     }
 
-    pub fn double<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS) -> Self {
+    /// Doubles the point in the SW projective coordinates.
+    pub fn double<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
-        if C::a_coeff().is_zero() == false {
+        if !GC::a_coeff().is_zero() {
             return self.generic_double(cs);
         }
-        let params = self.x.get_params().clone();
 
-        let mut three = C::Base::one();
+        let x_params = self.x.get_params().clone();
+
+        // To get 3, initialize 1, double it, and add 1
+        let mut three = GC::Base::one();
         three.double();
-        three.add_assign(&C::Base::one());
+        three.add_assign(&GC::Base::one());
 
-        let mut four = C::Base::one();
+        // To get 4, intialize 1 and double it twice
+        let mut four = GC::Base::one();
         four.double();
         four.double();
 
-        let curve_b = C::b_coeff();
+        // Extracting b parameter in Weisstrass equation, and calculating 3b
+        let curve_b = GC::b_coeff();
         let mut curve_b3 = curve_b;
         curve_b3.double();
         curve_b3.add_assign(&curve_b);
 
-        let mut three_nn = NN::allocated_constant(cs, three, &params);
-        let mut four_nn = NN::allocated_constant(cs, four, &params);
-        let mut curve_b3 = NN::allocated_constant(cs, curve_b3, &params);
+        // Getting 3 and 4 in non-native field, and initializing curve_b3 in non-native field
+        let mut three_nf = NF::allocated_constant(cs, three, &x_params);
+        let mut four_nf = NF::allocated_constant(cs, four, &x_params);
+        let mut curve_b3_nf = NF::allocated_constant(cs, curve_b3, &x_params);
 
+        // Preparing helper variables
         let x = &mut self.x;
         let y = &mut self.y;
         let z = &mut self.z;
@@ -86,18 +115,18 @@ where
         // t0 = y * y
         let mut t0 = y.square(cs);
         // t2 = b3 * z * z
-        let mut b3_mul_z = z.mul(cs, &mut curve_b3);
+        let mut b3_mul_z = z.mul(cs, &mut curve_b3_nf);
         let mut t2 = b3_mul_z.mul(cs, z);
         // y3 = t0 + t2
-        let mut y3: NN = t0.add(cs, &mut t2);
+        let mut y3: NF = t0.add(cs, &mut t2);
         // t1 = y * z
         let mut t1 = y.mul(cs, z);
         // z3 = 8 * t0 * t1
-        let mut t0_mul_4 = t0.mul(cs, &mut four_nn);
+        let mut t0_mul_4 = t0.mul(cs, &mut four_nf);
         let mut t0_mul_8 = t0_mul_4.double(cs);
         let z3 = t0_mul_8.mul(cs, &mut t1);
         // t4 = 4 * t0 - 3 * y3
-        let mut y3_mul_3 = y3.mul(cs, &mut three_nn);
+        let mut y3_mul_3 = y3.mul(cs, &mut three_nf);
         let mut t4 = t0_mul_4.sub(cs, &mut y3_mul_3);
         // y3 = t4 * y3
         let mut y3 = t4.mul(cs, &mut y3);
@@ -111,27 +140,29 @@ where
         let mut t4_mul_2 = t4.double(cs);
         let x3 = t4_mul_2.mul(cs, &mut t1);
 
-        let new = Self {
+        Self {
             x: x3,
             y: y3,
             z: z3,
             _marker: std::marker::PhantomData,
-        };
-
-        new
+        }
     }
 
-    fn generic_double<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS) -> Self {
+    /// Doubling the point
+    fn generic_double<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
         let params = self.x.get_params().clone();
 
-        let curve_b = C::b_coeff();
+        let curve_b = GC::b_coeff();
         let mut curve_b3 = curve_b;
         curve_b3.double();
         curve_b3.add_assign(&curve_b);
 
-        let mut curve_a = NN::allocated_constant(cs, C::a_coeff(), &params);
-        let mut curve_b3 = NN::allocated_constant(cs, curve_b3, &params);
+        let mut curve_a = NF::allocated_constant(cs, GC::a_coeff(), &params);
+        let mut curve_b3 = NF::allocated_constant(cs, curve_b3, &params);
 
         let x = &mut self.x;
         let y = &mut self.y;
@@ -220,7 +251,10 @@ where
         new
     }
 
-    pub fn negated<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS) -> Self {
+    pub fn negated<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         let y_negated = self.y.negated(cs);
 
         let new = Self {
@@ -233,24 +267,27 @@ where
         new
     }
 
-    fn add_sub_mixed_impl<CS: ConstraintSystem<F>>(
+    fn add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_xy: &mut (NN, NN),
+        other_xy: &mut (NF, NF),
         is_subtraction: bool,
-    ) -> Self {
+    ) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
-        if C::a_coeff().is_zero() == false {
+        if GC::a_coeff().is_zero() == false {
             return self.generic_add_sub_mixed_impl(cs, other_xy, is_subtraction);
         }
 
         let params = self.x.get_params().clone();
 
-        let mut three = C::Base::one();
+        let mut three = GC::Base::one();
         three.double();
-        three.add_assign(&C::Base::one());
+        three.add_assign(&GC::Base::one());
 
-        let curve_b = C::b_coeff();
+        let curve_b = GC::b_coeff();
         let mut curve_b3 = curve_b;
         curve_b3.double();
         curve_b3.add_assign(&curve_b);
@@ -258,15 +295,15 @@ where
         let mut curve_b6 = curve_b3;
         curve_b6.double();
 
-        let mut three_nn = NN::allocated_constant(cs, three, &params);
-        let mut curve_b3 = NN::allocated_constant(cs, curve_b3, &params);
-        let mut curve_b6 = NN::allocated_constant(cs, curve_b6, &params);
+        let mut three_nn = NF::allocated_constant(cs, three, &params);
+        let mut curve_b3 = NF::allocated_constant(cs, curve_b3, &params);
+        let mut curve_b6 = NF::allocated_constant(cs, curve_b6, &params);
 
         let x1 = &mut self.x;
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NN = other_xy.1.clone();
+        let mut y2_local: NF = other_xy.1.clone();
         let x2 = &mut other_xy.0;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
@@ -336,28 +373,31 @@ where
         new
     }
 
-    fn generic_add_sub_mixed_impl<CS: ConstraintSystem<F>>(
+    fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_xy: &mut (NN, NN),
+        other_xy: &mut (NF, NF),
         is_subtraction: bool,
-    ) -> Self {
+    ) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
         let params = self.x.get_params().clone();
 
-        let curve_b = C::b_coeff();
+        let curve_b = GC::b_coeff();
         let mut curve_b3 = curve_b;
         curve_b3.double();
         curve_b3.add_assign(&curve_b);
 
-        let mut curve_a = NN::allocated_constant(cs, C::a_coeff(), &params);
-        let mut curve_b3 = NN::allocated_constant(cs, curve_b3, &params);
+        let mut curve_a = NF::allocated_constant(cs, GC::a_coeff(), &params);
+        let mut curve_b3 = NF::allocated_constant(cs, curve_b3, &params);
 
         let x1 = &mut self.x;
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NN = other_xy.1.clone();
+        let mut y2_local: NF = other_xy.1.clone();
         let x2 = &mut other_xy.0;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
@@ -451,63 +491,64 @@ where
         new
     }
 
-    pub fn add_mixed<CS: ConstraintSystem<F>>(
-        &mut self,
-        cs: &mut CS,
-        other_xy: &mut (NN, NN),
-    ) -> Self {
+    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut (NF, NF)) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         self.add_sub_mixed_impl(cs, other_xy, false)
     }
 
-    pub fn sub_mixed<CS: ConstraintSystem<F>>(
-        &mut self,
-        cs: &mut CS,
-        other_xy: &mut (NN, NN),
-    ) -> Self {
+    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut (NF, NF)) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         self.add_sub_mixed_impl(cs, other_xy, true)
     }
 
-    pub fn convert_to_affine_or_default<CS: ConstraintSystem<F>>(
+    pub fn convert_to_affine_or_default<CS>(
         &mut self,
         cs: &mut CS,
-        default: C,
-    ) -> ((NN, NN), Boolean<F>) {
+        default: GC,
+    ) -> ((NF, NF), Boolean<F>)
+    where
+        CS: ConstraintSystem<F>,
+    {
         use pairing::ff::Field;
         let params = self.x.get_params().clone();
-        let is_point_at_infty = NN::is_zero(&mut self.z, cs);
+        let is_point_at_infty = NF::is_zero(&mut self.z, cs);
 
-        let one_nn = NN::allocated_constant(cs, C::Base::one(), &params);
-        let mut safe_z = NN::conditionally_select(cs, is_point_at_infty, &one_nn, &self.z);
+        let one_nn = NF::allocated_constant(cs, GC::Base::one(), &params);
+        let mut safe_z = NF::conditionally_select(cs, is_point_at_infty, &one_nn, &self.z);
         let x_for_safe_z = self.x.div_unchecked(cs, &mut safe_z);
         let y_for_safe_z = self.y.div_unchecked(cs, &mut safe_z);
 
         let (default_x, default_y) = default.into_xy_unchecked();
-        let default_x = NN::allocated_constant(cs, default_x, &params);
-        let default_y = NN::allocated_constant(cs, default_y, &params);
+        let default_x = NF::allocated_constant(cs, default_x, &params);
+        let default_y = NF::allocated_constant(cs, default_y, &params);
 
-        let x = NN::conditionally_select(cs, is_point_at_infty, &default_x, &x_for_safe_z);
-        let y = NN::conditionally_select(cs, is_point_at_infty, &default_y, &y_for_safe_z);
+        let x = NF::conditionally_select(cs, is_point_at_infty, &default_x, &x_for_safe_z);
+        let y = NF::conditionally_select(cs, is_point_at_infty, &default_y, &y_for_safe_z);
 
         ((x, y), is_point_at_infty)
     }
 }
 
-impl<F: SmallField, C: GenericCurveAffine, NN: NonNativeField<F, C::Base>> Selectable<F>
-    for SWProjectivePoint<F, C, NN>
+impl<F, GC, NF> Selectable<F> for SWProjectivePoint<F, GC, NF>
 where
-    C::Base: pairing::ff::PrimeField,
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: pairing::ff::PrimeField,
 {
-    const SUPPORTS_PARALLEL_SELECT: bool = false;
-
     fn conditionally_select<CS: ConstraintSystem<F>>(
         cs: &mut CS,
         flag: Boolean<F>,
         a: &Self,
         b: &Self,
     ) -> Self {
-        let x = NN::conditionally_select(cs, flag, &a.x, &b.x);
-        let y = NN::conditionally_select(cs, flag, &a.y, &b.y);
-        let z = NN::conditionally_select(cs, flag, &a.z, &b.z);
+        let x = NF::conditionally_select(cs, flag, &a.x, &b.x);
+        let y = NF::conditionally_select(cs, flag, &a.y, &b.y);
+        let z = NF::conditionally_select(cs, flag, &a.z, &b.z);
 
         Self {
             x,
