@@ -23,7 +23,7 @@ pub type AffinePoint<F> = (F, F);
 
 /// This is a struct for representing a point in the SW projective coordinates.
 #[derive(Derivative)]
-#[derivative(Clone, Debug)]
+#[derivative(Copy, Clone, Clone, Debug)]
 pub struct SWProjectivePoint<F, GC, NF>
 where
     F: SmallField,
@@ -50,8 +50,8 @@ where
     where
         CS: ConstraintSystem<F>,
     {
-        let x_params = x.get_params();
-        let z = NF::allocated_constant(cs, GC::Base::one(), x_params);
+        let params = x.get_params();
+        let z = NF::allocated_constant(cs, GC::Base::one(), params);
 
         Self {
             x,
@@ -66,14 +66,10 @@ where
     where
         CS: ConstraintSystem<F>,
     {
-        let x = NF::allocated_constant(cs, GC::Base::zero(), params);
-        let y = NF::allocated_constant(cs, GC::Base::one(), params);
-        let z = NF::allocated_constant(cs, GC::Base::zero(), params);
-
         Self {
-            x,
-            y,
-            z,
+            x: NF::allocated_constant(cs, GC::Base::zero(), params),
+            y: NF::allocated_constant(cs, GC::Base::one(), params),
+            z: NF::allocated_constant(cs, GC::Base::zero(), params),
             _marker: PhantomData,
         }
     }
@@ -92,14 +88,8 @@ where
         let x_params = self.x.get_params().clone();
 
         // To get 3, initialize 1, double it, and add 1
-        let mut three = GC::Base::one();
-        three.double();
-        three.add_assign(&GC::Base::one());
-
-        // To get 4, intialize 1 and double it twice
-        let mut four = GC::Base::one();
-        four.double();
-        four.double();
+        let three = GC::Base::from_str("3").expect("failed to parse 3");
+        let four = GC::Base::from_str("4").expect("failed to parse 4");
 
         // Extracting b parameter in Weisstrass equation, and calculating 3b
         let curve_b = GC::b_coeff();
@@ -159,16 +149,18 @@ where
     where
         CS: ConstraintSystem<F>,
     {
+        // Calculating 3*b
+        let b = GC::b_coeff();
+        let mut b_tripled = b;
+        b_tripled.double();
+        b_tripled.add_assign(&b);
+
+        // Making a and b in non-native field
         let params = self.x.get_params().clone();
+        let mut a = NF::allocated_constant(cs, GC::a_coeff(), &params);
+        let mut b_tripled = NF::allocated_constant(cs, b_tripled, &params);
 
-        let curve_b = GC::b_coeff();
-        let mut curve_b3 = curve_b;
-        curve_b3.double();
-        curve_b3.add_assign(&curve_b);
-
-        let mut curve_a = NF::allocated_constant(cs, GC::a_coeff(), &params);
-        let mut curve_b3 = NF::allocated_constant(cs, curve_b3, &params);
-
+        // Preparing helper variables
         let x = &mut self.x;
         let y = &mut self.y;
         let z = &mut self.z;
@@ -190,9 +182,9 @@ where
         // z3 = z3 + z3
         let mut z3 = z3.double(cs);
         // x3 = a * z3
-        let mut x3 = curve_a.mul(cs, &mut z3);
+        let mut x3 = a.mul(cs, &mut z3);
         // y3 = b3 * t2
-        let mut y3 = curve_b3.mul(cs, &mut t2);
+        let mut y3 = b_tripled.mul(cs, &mut t2);
 
         // y3 = x3 + y3
         let mut y3 = x3.add(cs, &mut y3);
@@ -206,14 +198,14 @@ where
         // x3 = t3 * x3
         let mut x3 = t3.mul(cs, &mut x3);
         // z3 = b3 * z3
-        let mut z3 = curve_b3.mul(cs, &mut z3);
+        let mut z3 = b_tripled.mul(cs, &mut z3);
 
         // t2 = a * t2
-        let mut t2 = curve_a.mul(cs, &mut t2);
+        let mut t2 = a.mul(cs, &mut t2);
         // t3 = t0 - t2
         let mut t3 = t0.sub(cs, &mut t2);
         // t3 = a * t3
-        let mut t3 = curve_a.mul(cs, &mut t3);
+        let mut t3 = a.mul(cs, &mut t3);
 
         // t3 = t3 + z3
         let mut t3 = t3.add(cs, &mut z3);
@@ -246,6 +238,9 @@ where
         // z3 = z3 + z3
         let z3 = z3.double(cs);
 
+        self.x = x3.clone();
+        self.y = y3.clone();
+        self.z = z3.clone();
         Self {
             x: x3,
             y: y3,
@@ -260,14 +255,50 @@ where
     where
         CS: ConstraintSystem<F>,
     {
-        let y_negated = self.y.negated(cs);
-
         Self {
             x: self.x.clone(),
-            y: y_negated,
+            y: self.y.negated(cs),
             z: self.z.clone(),
             _marker: PhantomData,
         }
+    }
+
+    /// Multiplies the point in the SW projective coordinates by a scalar.
+    pub fn mul_scalar<CS>(&mut self, cs: &mut CS, scalar: GC::Base) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        // For now we mock the double and add algorithm which is not optimal
+        return self.mul_scalar_double_and_add(cs, scalar);
+    }
+
+    /// Multiplies the point in the SW projective coordinates by a scalar using the double-and-add algorithm.
+    /// See https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
+    fn mul_scalar_double_and_add<CS>(&mut self, cs: &mut CS, scalar: GC::Base) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        let mut result = Self::zero(cs, self.x.get_params());
+        let mut temp = self.clone();
+
+        // Convert the scalar to bits
+        let scalar_bits = scalar
+            .into_repr()
+            .as_ref()
+            .iter()
+            .rev()
+            .flat_map(|byte| (0..8).rev().map(move |i| (byte >> i) & 1 == 1))
+            .collect::<Vec<_>>();
+
+        for bit in scalar_bits {
+            if bit {
+                let mut affine_temp = temp.must_to_affine(cs);
+                result = result.add_mixed(cs, &mut affine_temp);
+            }
+            temp.double(cs);
+        }
+
+        result
     }
 
     /// Adds (subtracts) another affine-represented point
@@ -533,6 +564,21 @@ where
         let y = NF::conditionally_select(cs, at_infinity, &default_y, &y_for_safe_z);
 
         ((x, y), at_infinity)
+    }
+
+    /// This function is used to convert the point to the affine coordinates.
+    /// If the point is at infinity, it panics.
+    pub fn must_to_affine<CS>(&mut self, cs: &mut CS) -> AffinePoint<NF>
+    where
+        CS: ConstraintSystem<F>,
+    {
+        let z_is_zero = self.z.is_zero(cs);
+        let boolean_false = Boolean::allocated_constant(cs, false);
+        Boolean::enforce_equal(cs, &z_is_zero, &boolean_false);
+
+        let x = self.x.div_unchecked(cs, &mut self.z);
+        let y = self.y.div_unchecked(cs, &mut self.z);
+        (x, y)
     }
 }
 
