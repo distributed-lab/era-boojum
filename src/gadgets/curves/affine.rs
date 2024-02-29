@@ -90,6 +90,7 @@ where
         }
     }
 
+    /// Adds two affine points on the curve.
     pub fn add<CS>(&mut self, cs: &mut CS, other: &mut Self) -> Self
     where
         CS: ConstraintSystem<F>,
@@ -106,6 +107,15 @@ where
         }
 
         Self::infinity(cs, &self.x.get_params())
+    }
+
+    /// Subtracts two affine points on the curve.
+    pub fn sub<CS>(&mut self, cs: &mut CS, other: &mut Self) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        let mut negated_other = other.negate(cs);
+        self.add(cs, &mut negated_other)
     }
 
     /// Adds two points with unequal x coordinates. If the x coordinates are equal, the result is undefined
@@ -201,5 +211,47 @@ where
             is_infinity: self.is_infinity,
             _marker: PhantomData,
         }
+    }
+
+    /// Negates the point by negating the y coordinate
+    pub fn negate<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        self.y = self.y.negated(cs);
+
+        Self {
+            x: self.x.clone(),
+            y: self.y.clone(),
+            is_infinity: self.is_infinity,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Multiplies the affine point by a scalar.
+    pub fn mul_by_scalar<CS>(&mut self, cs: &mut CS, scalar: &GC::Base) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        let mut result = Self::infinity(cs, self.x.get_params());
+        let mut temp = self.clone();
+
+        // Convert the scalar to bits
+        let scalar_bits = scalar
+            .into_repr()
+            .as_ref()
+            .iter()
+            .rev()
+            .flat_map(|byte| (0..8).rev().map(move |i| (byte >> i) & 1 == 1))
+            .collect::<Vec<_>>();
+
+        for bit in scalar_bits {
+            if bit {
+                result = result.add(cs, &mut temp);
+            }
+            temp.double(cs);
+        }
+
+        result
     }
 }

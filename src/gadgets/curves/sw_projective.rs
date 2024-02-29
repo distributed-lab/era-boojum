@@ -92,7 +92,7 @@ where
         // Initialize constants three and four
         let mut two_scalar = GC::Base::one();
         two_scalar.double();
-        
+
         let mut three_scalar = GC::Base::one();
         three_scalar.add_assign(&two_scalar);
 
@@ -532,7 +532,11 @@ where
     }
 
     /// Add the point in affine coordinates to the point in the projective coordinates.
-    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut ExtendedAffinePoint<F, GC, NF>)  -> Self
+    pub fn add_mixed<CS>(
+        &mut self,
+        cs: &mut CS,
+        other_xy: &mut ExtendedAffinePoint<F, GC, NF>,
+    ) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -540,7 +544,11 @@ where
     }
 
     /// Subtracts a point in the affine coordinates from the point in the projective coordinates.
-    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut ExtendedAffinePoint<F, GC, NF>) -> Self
+    pub fn sub_mixed<CS>(
+        &mut self,
+        cs: &mut CS,
+        other_xy: &mut ExtendedAffinePoint<F, GC, NF>,
+    ) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -548,15 +556,12 @@ where
     }
 
     /// Converts the point back to the affine coordinates.
-    pub fn convert_to_affine<CS>(
-        &mut self,
-        cs: &mut CS,
-    ) -> ExtendedAffinePoint<F, GC, NF>
+    pub fn convert_to_affine<CS>(&mut self, cs: &mut CS) -> ExtendedAffinePoint<F, GC, NF>
     where
         CS: ConstraintSystem<F>,
-    {   
+    {
         let params = self.x.get_params().clone();
-        
+
         // Handle the case where self.z is zero (i.e., the point is at infinity)
         let at_infinity = NF::is_zero(&mut self.z, cs);
         let boolean_true = Boolean::allocated_constant(cs, true);
