@@ -8,8 +8,8 @@ The code below is based on the following paper: https://eprint.iacr.org/2015/106
 */
 
 use super::{
-    boolean::Boolean, non_native_field::traits::NonNativeField, traits::selectable::Selectable,
-    Derivative, SmallField,
+    affine::ExtendedAffinePoint, boolean::Boolean, non_native_field::traits::NonNativeField,
+    traits::selectable::Selectable, Derivative, SmallField,
 };
 use crate::cs::traits::cs::ConstraintSystem;
 use pairing::{
@@ -17,9 +17,6 @@ use pairing::{
     GenericCurveAffine,
 };
 use std::{marker::PhantomData, sync::Arc};
-
-/// Type alias for representing the affine point pair.
-pub type AffinePoint<F> = (F, F);
 
 /// This is a struct for representing a point in the SW projective coordinates.
 #[derive(Derivative)]
@@ -44,9 +41,8 @@ where
     NF: NonNativeField<F, GC::Base>,
     GC::Base: PrimeField,
 {
-    /// Initializes a new point in the SW projective coordinates.
-    /// The point is given as `(x : y : 1)`.
-    pub fn from_xy_unchecked<CS>(cs: &mut CS, (x, y): AffinePoint<NF>) -> Self
+    /// Initializes a new point in the SW projective coordinates with the specified coordinates.
+    pub fn new<CS>(cs: &mut CS, x: NF, y: NF) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -59,6 +55,14 @@ where
             z,
             _marker: PhantomData,
         }
+    }
+
+    /// Initializes a new point in the SW projective coordinates with the specified coordinates.
+    pub fn from_affine<CS>(cs: &mut CS, affine_point: ExtendedAffinePoint<F, GC, NF>) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        Self::new(cs, affine_point.x, affine_point.y)
     }
 
     /// Initializes the zero point of the curve, which is represented by a point `(0 : 1 : 0)`.
@@ -85,11 +89,15 @@ where
             return self.generic_double(cs);
         }
 
-        let x_params = self.x.get_params().clone();
+        // Initialize constants three and four
+        let mut two_scalar = GC::Base::one();
+        two_scalar.double();
+        
+        let mut three_scalar = GC::Base::one();
+        three_scalar.add_assign(&two_scalar);
 
-        // To get 3, initialize 1, double it, and add 1
-        let three = GC::Base::from_str("3").expect("failed to parse 3");
-        let four = GC::Base::from_str("4").expect("failed to parse 4");
+        let mut four_scalar = two_scalar.clone();
+        four_scalar.double();
 
         // Extracting b parameter in Weisstrass equation, and calculating 3b
         let curve_b = GC::b_coeff();
@@ -98,9 +106,10 @@ where
         curve_b3.add_assign(&curve_b);
 
         // Getting 3 and 4 in non-native field, and initializing curve_b3 in non-native field
-        let mut three_nf = NF::allocated_constant(cs, three, &x_params);
-        let mut four_nf = NF::allocated_constant(cs, four, &x_params);
-        let mut curve_b3_nf = NF::allocated_constant(cs, curve_b3, &x_params);
+        let params = self.x.get_params().clone();
+        let mut three_nf = NF::allocated_constant(cs, three_scalar, &params);
+        let mut four_nf = NF::allocated_constant(cs, four_scalar, &params);
+        let mut curve_b3_nf = NF::allocated_constant(cs, curve_b3, &params);
 
         // Preparing helper variables
         let x = &mut self.x;
@@ -292,7 +301,7 @@ where
 
         for bit in scalar_bits {
             if bit {
-                let mut affine_temp = temp.must_to_affine(cs);
+                let mut affine_temp = temp.convert_to_affine(cs);
                 result = result.add_mixed(cs, &mut affine_temp);
             }
             temp.double(cs);
@@ -305,14 +314,14 @@ where
     fn add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_point: &mut AffinePoint<NF>,
+        point: &mut ExtendedAffinePoint<F, GC, NF>,
         is_subtraction: bool,
     ) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         if GC::a_coeff().is_zero() == false {
-            return self.generic_add_sub_mixed_impl(cs, other_point, is_subtraction);
+            return self.generic_add_sub_mixed_impl(cs, point, is_subtraction);
         }
 
         let params = self.x.get_params().clone();
@@ -337,8 +346,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = other_point.1.clone();
-        let x2 = &mut other_point.0;
+        let mut y2_local: NF = point.y.clone();
+        let x2 = &mut point.x;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
         }
@@ -410,7 +419,7 @@ where
     fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        other_point: &mut AffinePoint<NF>,
+        point: &mut ExtendedAffinePoint<F, GC, NF>,
         is_subtraction: bool,
     ) -> Self
     where
@@ -430,8 +439,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = other_point.1.clone();
-        let x2 = &mut other_point.0;
+        let mut y2_local: NF = point.y.clone();
+        let x2 = &mut point.x;
         if is_subtraction {
             y2_local = y2_local.negated(cs);
         }
@@ -523,7 +532,7 @@ where
     }
 
     /// Add the point in affine coordinates to the point in the projective coordinates.
-    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut AffinePoint<NF>) -> Self
+    pub fn add_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut ExtendedAffinePoint<F, GC, NF>)  -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -531,54 +540,36 @@ where
     }
 
     /// Subtracts a point in the affine coordinates from the point in the projective coordinates.
-    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut AffinePoint<NF>) -> Self
+    pub fn sub_mixed<CS>(&mut self, cs: &mut CS, other_xy: &mut ExtendedAffinePoint<F, GC, NF>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         self.add_sub_mixed_impl(cs, other_xy, true)
     }
 
-    /// This function is used to convert the point to the affine coordinates.
-    /// If the point is at infinity, it returns the default point.
-    pub fn convert_to_affine_or_default<CS>(
+    /// Converts the point back to the affine coordinates.
+    pub fn convert_to_affine<CS>(
         &mut self,
         cs: &mut CS,
-        default: GC,
-    ) -> (AffinePoint<NF>, Boolean<F>)
+    ) -> ExtendedAffinePoint<F, GC, NF>
     where
         CS: ConstraintSystem<F>,
-    {
-        let x_params = self.x.get_params().clone();
+    {   
+        let params = self.x.get_params().clone();
+        
+        // Handle the case where self.z is zero (i.e., the point is at infinity)
         let at_infinity = NF::is_zero(&mut self.z, cs);
+        let boolean_true = Boolean::allocated_constant(cs, true);
+        if at_infinity == boolean_true {
+            return ExtendedAffinePoint::infinity(cs, &params);
+        }
 
-        let one_nf = NF::allocated_constant(cs, GC::Base::one(), &x_params);
-        let mut safe_z = NF::conditionally_select(cs, at_infinity, &one_nf, &self.z);
-        let x_for_safe_z = self.x.div_unchecked(cs, &mut safe_z);
-        let y_for_safe_z = self.y.div_unchecked(cs, &mut safe_z);
-
-        let (default_x, default_y) = default.into_xy_unchecked();
-        let default_x = NF::allocated_constant(cs, default_x, &x_params);
-        let default_y = NF::allocated_constant(cs, default_y, &x_params);
-
-        let x = NF::conditionally_select(cs, at_infinity, &default_x, &x_for_safe_z);
-        let y = NF::conditionally_select(cs, at_infinity, &default_y, &y_for_safe_z);
-
-        ((x, y), at_infinity)
-    }
-
-    /// This function is used to convert the point to the affine coordinates.
-    /// If the point is at infinity, it panics.
-    pub fn must_to_affine<CS>(&mut self, cs: &mut CS) -> AffinePoint<NF>
-    where
-        CS: ConstraintSystem<F>,
-    {
-        let z_is_zero = self.z.is_zero(cs);
-        let boolean_false = Boolean::allocated_constant(cs, false);
-        Boolean::enforce_equal(cs, &z_is_zero, &boolean_false);
-
+        // Return the point in the affine coordinates (X/Z, Y/Z)
+        // Since we checked that Z is not zero, we can safely divide by Z
         let x = self.x.div_unchecked(cs, &mut self.z);
         let y = self.y.div_unchecked(cs, &mut self.z);
-        (x, y)
+
+        ExtendedAffinePoint::new(cs, x, y)
     }
 }
 
