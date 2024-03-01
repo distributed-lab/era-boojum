@@ -8,8 +8,11 @@ The code below is based on the following paper: https://eprint.iacr.org/2015/106
 */
 
 use super::{
-    affine::ExtendedAffinePoint, boolean::Boolean, non_native_field::traits::NonNativeField,
-    traits::selectable::Selectable, Derivative, SmallField,
+    affine::ExtendedAffinePoint,
+    boolean::Boolean,
+    non_native_field::traits::NonNativeField,
+    traits::{group_point::EllipticGroupPoint, selectable::Selectable},
+    Derivative, SmallField,
 };
 use crate::cs::traits::cs::ConstraintSystem;
 use pairing::{
@@ -34,7 +37,7 @@ where
     pub _marker: PhantomData<(F, GC)>,
 }
 
-impl<F, GC, NF> SWProjectivePoint<F, GC, NF>
+impl<F, GC, NF> EllipticGroupPoint<F, GC, NF> for SWProjectivePoint<F, GC, NF>
 where
     F: SmallField,
     GC: GenericCurveAffine,
@@ -42,7 +45,7 @@ where
     GC::Base: PrimeField,
 {
     /// Initializes a new point in the SW projective coordinates with the specified coordinates.
-    pub fn new<CS>(cs: &mut CS, x: NF, y: NF) -> Self
+    fn new<CS>(cs: &mut CS, x: NF, y: NF) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -57,16 +60,8 @@ where
         }
     }
 
-    /// Initializes a new point in the SW projective coordinates with the specified coordinates.
-    pub fn from_affine<CS>(cs: &mut CS, affine_point: ExtendedAffinePoint<F, GC, NF>) -> Self
-    where
-        CS: ConstraintSystem<F>,
-    {
-        Self::new(cs, affine_point.x, affine_point.y)
-    }
-
     /// Initializes the zero point of the curve, which is represented by a point `(0 : 1 : 0)`.
-    pub fn zero<CS>(cs: &mut CS, params: &Arc<NF::Params>) -> Self
+    fn infinity<CS>(cs: &mut CS, params: &Arc<NF::Params>) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -78,10 +73,20 @@ where
         }
     }
 
+    /// Returns the x-coordinate of the point
+    fn x(&self) -> &NF {
+        &self.x
+    }
+
+    /// Returns the y-coordinate of the point
+    fn y(&self) -> &NF {
+        &self.y
+    }
+
     /// Doubles the point in the SW projective coordinates, that is, finds the point `2 * self`.
     /// This is a more optimized version of the generic double function.
     /// If the `a` coefficient of the curve is non-zero, the generic double function is called.
-    pub fn double<CS>(&mut self, cs: &mut CS) -> Self
+    fn double<CS>(&mut self, cs: &mut CS) -> Self
     where
         CS: ConstraintSystem<F>,
     {
@@ -89,6 +94,71 @@ where
             return self.generic_double(cs);
         }
 
+        self.invariant_0_exception_free_doubling(cs)
+    }
+
+    /// Negates the point in the SW projective coordinates.
+    /// The negation of the point `(x : y : z)` is `(x : -y : z)`.
+    fn negate<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        Self {
+            x: self.x.clone(),
+            y: self.y.negated(cs),
+            z: self.z.clone(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Multiplies the point in the SW projective coordinates by a scalar.
+    fn mul<CS>(&mut self, cs: &mut CS, scalar: &GC::Base) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        // For now we mock the double and add algorithm which is not optimal
+        return self.mul_scalar_double_and_add(cs, &scalar);
+    }
+
+    /// Add the point in affine coordinates to the point in the projective coordinates.
+    fn add<CS>(&mut self, cs: &mut CS, other_xy: &mut Self) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        self.add_sub_mixed_impl(cs, other_xy, false)
+    }
+
+    /// Subtracts a point in the affine coordinates from the point in the projective coordinates.
+    fn sub<CS>(&mut self, cs: &mut CS, other_xy: &mut Self) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        self.add_sub_mixed_impl(cs, other_xy, true)
+    }
+}
+
+impl<F, GC, NF> SWProjectivePoint<F, GC, NF>
+where
+    F: SmallField,
+    GC: GenericCurveAffine,
+    NF: NonNativeField<F, GC::Base>,
+    GC::Base: PrimeField,
+{
+    /// Initializes a new point in the SW projective coordinates with the specified coordinates.
+    pub fn from_affine<CS>(cs: &mut CS, affine_point: ExtendedAffinePoint<F, GC, NF>) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
+        Self::new(cs, affine_point.x, affine_point.y)
+    }
+
+    /// Doubles the point in the SW projective coordinates, that is, finds the point `2 * self`.
+    /// This is a more optimized version of the generic double function, using
+    /// exception-free doubling.
+    fn invariant_0_exception_free_doubling<CS>(&mut self, cs: &mut CS) -> Self
+    where
+        CS: ConstraintSystem<F>,
+    {
         // Initialize constants three and four
         let mut two_scalar = GC::Base::one();
         two_scalar.double();
@@ -258,36 +328,13 @@ where
         }
     }
 
-    /// Negates the point in the SW projective coordinates.
-    /// The negation of the point `(x : y : z)` is `(x : -y : z)`.
-    pub fn negated<CS>(&mut self, cs: &mut CS) -> Self
-    where
-        CS: ConstraintSystem<F>,
-    {
-        Self {
-            x: self.x.clone(),
-            y: self.y.negated(cs),
-            z: self.z.clone(),
-            _marker: PhantomData,
-        }
-    }
-
-    /// Multiplies the point in the SW projective coordinates by a scalar.
-    pub fn mul_scalar<CS>(&mut self, cs: &mut CS, scalar: GC::Base) -> Self
-    where
-        CS: ConstraintSystem<F>,
-    {
-        // For now we mock the double and add algorithm which is not optimal
-        return self.mul_scalar_double_and_add(cs, scalar);
-    }
-
     /// Multiplies the point in the SW projective coordinates by a scalar using the double-and-add algorithm.
     /// See https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
-    fn mul_scalar_double_and_add<CS>(&mut self, cs: &mut CS, scalar: GC::Base) -> Self
+    fn mul_scalar_double_and_add<CS>(&mut self, cs: &mut CS, scalar: &GC::Base) -> Self
     where
         CS: ConstraintSystem<F>,
     {
-        let mut result = Self::zero(cs, self.x.get_params());
+        let mut result = Self::infinity(cs, self.x.get_params());
         let mut temp = self.clone();
 
         // Convert the scalar to bits
@@ -301,8 +348,7 @@ where
 
         for bit in scalar_bits {
             if bit {
-                let mut affine_temp = temp.convert_to_affine(cs);
-                result = result.add_mixed(cs, &mut affine_temp);
+                result = result.add(cs, &mut temp);
             }
             temp.double(cs);
         }
@@ -310,18 +356,14 @@ where
         result
     }
 
-    /// Adds (subtracts) another affine-represented point
-    fn add_sub_mixed_impl<CS>(
-        &mut self,
-        cs: &mut CS,
-        point: &mut ExtendedAffinePoint<F, GC, NF>,
-        is_subtraction: bool,
-    ) -> Self
+    /// Mixed addition/subtraction of the point in the SW projective coordinates with
+    /// another SW projective-represented point.
+    fn add_sub_mixed_impl<CS>(&mut self, cs: &mut CS, other: &mut Self, subtraction: bool) -> Self
     where
         CS: ConstraintSystem<F>,
     {
         if GC::a_coeff().is_zero() == false {
-            return self.generic_add_sub_mixed_impl(cs, point, is_subtraction);
+            return self.generic_add_sub_mixed_impl(cs, other, subtraction);
         }
 
         let params = self.x.get_params().clone();
@@ -346,9 +388,9 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = point.y.clone();
-        let x2 = &mut point.x;
-        if is_subtraction {
+        let mut y2_local: NF = other.y.clone();
+        let x2 = &mut other.x;
+        if subtraction {
             y2_local = y2_local.negated(cs);
         }
         let y2 = &mut y2_local;
@@ -419,8 +461,8 @@ where
     fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        point: &mut ExtendedAffinePoint<F, GC, NF>,
-        is_subtraction: bool,
+        point: &mut Self,
+        subtraction: bool,
     ) -> Self
     where
         CS: ConstraintSystem<F>,
@@ -441,7 +483,7 @@ where
 
         let mut y2_local: NF = point.y.clone();
         let x2 = &mut point.x;
-        if is_subtraction {
+        if subtraction {
             y2_local = y2_local.negated(cs);
         }
         let y2 = &mut y2_local;
@@ -531,32 +573,8 @@ where
         }
     }
 
-    /// Add the point in affine coordinates to the point in the projective coordinates.
-    pub fn add_mixed<CS>(
-        &mut self,
-        cs: &mut CS,
-        other_xy: &mut ExtendedAffinePoint<F, GC, NF>,
-    ) -> Self
-    where
-        CS: ConstraintSystem<F>,
-    {
-        self.add_sub_mixed_impl(cs, other_xy, false)
-    }
-
-    /// Subtracts a point in the affine coordinates from the point in the projective coordinates.
-    pub fn sub_mixed<CS>(
-        &mut self,
-        cs: &mut CS,
-        other_xy: &mut ExtendedAffinePoint<F, GC, NF>,
-    ) -> Self
-    where
-        CS: ConstraintSystem<F>,
-    {
-        self.add_sub_mixed_impl(cs, other_xy, true)
-    }
-
     /// Converts the point back to the affine coordinates.
-    pub fn convert_to_affine<CS>(&mut self, cs: &mut CS) -> ExtendedAffinePoint<F, GC, NF>
+    pub fn to_affine<CS>(&mut self, cs: &mut CS) -> ExtendedAffinePoint<F, GC, NF>
     where
         CS: ConstraintSystem<F>,
     {
