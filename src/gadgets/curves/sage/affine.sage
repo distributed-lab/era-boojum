@@ -1,32 +1,51 @@
 from __future__ import annotations
 
-import copy
+from copy import copy
+from elliptic_curve import InternalEllipticCurve
 
 class ExtendedAffinePoint:
-    def __init__(self, x: GF, y: GF, a: GF, b: GF) -> None:
+    def __init__(self, curve: InternalEllipticCurve, x: GF, y: GF) -> None:
         """
-        Initializes the extended short weierstrass point on elliptic curve
-        E: y^2 = x^3 + ax + b
+        Initializes the extended short weierstrass point on 
+        the specified elliptic curve
 
         Args:
+            - curve - InternalEllipticCurve, the curve the point is on
             - (x, y) - point on E (in finite field form)
-            - (a, b) - coefficients (in finite field form)
         """
         
+        self._curve = curve
         self._x = x
         self._y = y
-        self._a = a
-        self._b = b
         self._is_infty = False
 
-    def turn_into_infinity(self) -> None:
+    def get_coordinates(self) -> tuple[GF, GF]:
+        """
+        Returns the coordinates of the point
+        """
+        return (self._x, self._y)
+
+    @staticmethod
+    def infty(curve: InternalEllipticCurve) -> ExtendedAffinePoint:
         """
         Turn the point into infinity
         """
 
-        self._x = 0
-        self._y = 0
-        self._is_infty = True
+        point = ExtendedAffinePoint(curve, 0, 0)
+        point._is_infty = True
+        return point
+
+    def negate(self) -> ExtendedAffinePoint:
+        """
+        Negates the point
+        """
+
+        if self._is_infty:
+            return self
+
+        copied_self = copy(self)
+        copied_self._y = -copied_self._y
+        return copied_self
         
     def __add__(self, other: ExtendedAffinePoint) -> ExtendedAffinePoint:
         """
@@ -45,24 +64,36 @@ class ExtendedAffinePoint:
             return self._add_unequal_x(other)
 
         if self._y == other._y:
-            return self._double()
+            return self.double()
         
-        self.turn_into_infinity()
-        return self
+        return ExtendedAffinePoint.infty(self._curve)
 
-    def _double(self) -> ExtendedAffinePoint:
+    def __sub__(self, other: ExtendedAffinePoint) -> ExtendedAffinePoint:
+        """
+        Subtracts another ExtendedAffinePoint from the given point (basically, overiding the - operation)
+
+        Args:
+            - other - ExtendedAffinePoint, point to subtract
+            
+        Returns:
+            Subtracted point on the curve
+        """
+
+        return self + other.negate()
+
+    def double(self) -> ExtendedAffinePoint:
         """
         Doubles the point, returning another point.
         """
         if self._is_infty:
             return self
 
-        assert self._y != F(0)
+        assert self._y != 0
 
-        slope = (3*self._x*self._x + self._a) / (2*self._y)
-        new_x = slope*slope - 2*self._x
-        new_y = slope*(self._x - new_x) - self._y
-        return ExtendedAffinePoint(new_x, new_y, self._a, self._b)
+        slope = (3 * self._x * self._x + self._curve.a) / (2 * self._y)
+        new_x = slope * slope - 2 * self._x
+        new_y = slope * (self._x - new_x) - self._y
+        return ExtendedAffinePoint(self._curve, new_x, new_y)
 
     def mul(self, n: Integers) -> ExtendedAffinePoint:
         """
@@ -75,16 +106,17 @@ class ExtendedAffinePoint:
             New point on the curve
         """
 
-        result = copy.copy(self)
-        result.turn_into_infinity()
-        temp = copy.copy(self)
+        result = ExtendedAffinePoint.infty(self._curve)
+        temp = copy(self)
         bits = n.digits(base=2)
         
         for bit in bits:
+            print('Before:', result)
             if bit == 1:
                 result = result + temp
             
-            temp = temp + temp
+            temp = temp.double()
+            print('After:', result)
         
         return result
     
@@ -102,9 +134,10 @@ class ExtendedAffinePoint:
         assert self._x != other._x
         
         slope = (self._y - other._y) / (self._x - other._x)
-        new_x = slope*slope - self._x - other._x
-        new_y = slope*(self._x - new_x) - self._y
-        return ExtendedAffinePoint(new_x, new_y, self._a, self._b)
+        new_x = slope * slope - self._x - other._x
+        new_y = slope * (self._x - new_x) - self._y
+
+        return ExtendedAffinePoint(self._curve, new_x, new_y)
 
     def __str__(self):
         """
@@ -117,40 +150,46 @@ class ExtendedAffinePoint:
 
 
 if __name__ == '__main__':
+    F = GF(23)
+    Z = IntegerRing()
+
     a = 17
     b = 6
     q = 23
-    F = GF(23)
-    Z = IntegerRing()
-    E = EllipticCurve(F, [17, 6])
+    
+    curve = InternalEllipticCurve(F, a, b)
+    E = EllipticCurve(F, [a, b])
 
     tests = [
         ([10, 7], [7, 13]),
     ]
 
     for P, Q in tests:
-        print(f'We have points {P} and {Q}')
+        print(f'We have points {P} and {Q}...')
+
+        # Verifying addition
         P_E = E(P)
         Q_E = E(Q)
         R_E = P_E + Q_E
-        
-        P_affine = ExtendedAffinePoint(F(P[0]), F(P[1]), F(a), F(b))
-        Q_affine = ExtendedAffinePoint(F(Q[0]), F(Q[1]), F(a), F(b))
+        P_affine = ExtendedAffinePoint(curve, F(P[0]), F(P[1]))
+        Q_affine = ExtendedAffinePoint(curve, F(Q[0]), F(Q[1]))
         R_affine = P_affine + Q_affine
-        print(f'Got: P+Q={R_affine}, expected: P+Q={R_E}')
+        print(f'Got: P + Q = {R_affine}, expected: P + Q = {R_E}')
 
-        double_P_E = 2*P_E
-        double_P_affine = P_affine + P_affine
-        print(f'Got: 2*P={double_P_affine}, expected: 2*P={double_P_E}')
+        # Verifying doubling
+        double_P_E = 2 * P_E
+        double_P_affine = P_affine.double()
+        print(f'Got: 2 * P = {double_P_affine}, expected: 2 * P = {double_P_E}')
 
-        double_Q_E = 2*Q_E
-        double_Q_affine = Q_affine + Q_affine
-        print(f'Got: 2*Q={double_Q_affine}, expected: 2*Q={double_Q_E}')
+        double_Q_E = 2 * Q_E
+        double_Q_affine = Q_affine.double()
+        print(f'Got: 2 * Q = {double_Q_affine}, expected: 2 * Q = {double_Q_E}')
 
+        # Verifying scalar multiplication
         five_P_E = 5*P_E
-        five_P_affine = P_affine.mul(Z(15))
-        print(f'Got: 5*P={five_P_affine}, expected: 5*P={five_P_E}')
+        five_P_affine = P_affine.mul(Z(5))
+        print(f'Got: 5 * P = {five_P_affine}, expected: 5 * P = {five_P_E}')
 
         five_Q_E = 5*Q_E
-        five_Q_affine = Q_affine.mul(Z(15))
-        print(f'Got: 5*Q={five_Q_affine}, expected: 5*Q={five_Q_E}')
+        five_Q_affine = Q_affine.mul(Z(5))
+        print(f'Got: 5 * Q = {five_Q_affine}, expected: 5 * Q = {five_Q_E}')

@@ -298,7 +298,7 @@ where
         let mut t0 = t0.add(cs, &mut t2);
         // t0 = t0 * t3
         let mut t0 = t0.mul(cs, &mut t3);
-        // y3 = y3 + y0
+        // y3 = y3 + t0
         let y3 = y3.add(cs, &mut t0);
 
         // t2 = y * z
@@ -390,8 +390,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = other.y.clone();
         let x2 = &mut other.x;
+        let mut y2_local: NF = other.y.clone();
         if subtraction {
             y2_local = y2_local.negated(cs);
         }
@@ -463,7 +463,7 @@ where
     fn generic_add_sub_mixed_impl<CS>(
         &mut self,
         cs: &mut CS,
-        point: &mut Self,
+        other: &mut Self,
         subtraction: bool,
     ) -> Self
     where
@@ -483,8 +483,8 @@ where
         let y1 = &mut self.y;
         let z1 = &mut self.z;
 
-        let mut y2_local: NF = point.y.clone();
-        let x2 = &mut point.x;
+        let mut y2_local: NF = other.y.clone();
+        let x2 = &mut other.x;
         if subtraction {
             y2_local = y2_local.negated(cs);
         }
