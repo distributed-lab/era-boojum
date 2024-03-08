@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 class ExtendedAffinePoint:
     def __init__(self, x: GF, y: GF, a: GF, b: GF) -> None:
         """
@@ -21,6 +23,7 @@ class ExtendedAffinePoint:
         """
         Turn the point into infinity
         """
+
         self._x = 0
         self._y = 0
         self._is_infty = True
@@ -35,7 +38,9 @@ class ExtendedAffinePoint:
         Returns:
             Added point on the curve
         """
-        
+        if self._is_infty:
+            return other
+
         if self._x != other._x:
             return self._add_unequal_x(other)
 
@@ -49,12 +54,39 @@ class ExtendedAffinePoint:
         """
         Doubles the point, returning another point.
         """
-        
+        if self._is_infty:
+            return self
+
         assert self._y != F(0)
+
         slope = (3*self._x*self._x + self._a) / (2*self._y)
         new_x = slope*slope - 2*self._x
         new_y = slope*(self._x - new_x) - self._y
         return ExtendedAffinePoint(new_x, new_y, self._a, self._b)
+
+    def mul(self, n: Integers) -> ExtendedAffinePoint:
+        """
+        Multiplies the point by a scalar n
+
+        Args:
+            - n - Integer, scalar to multiply by
+
+        Returns:
+            New point on the curve
+        """
+
+        result = copy.copy(self)
+        result.turn_into_infinity()
+        temp = copy.copy(self)
+        bits = n.digits(base=2)
+        
+        for bit in bits:
+            if bit == 1:
+                result = result + temp
+            
+            temp = temp + temp
+        
+        return result
     
     def _add_unequal_x(self, other: ExtendedAffinePoint) -> ExtendedAffinePoint:
         """
@@ -78,34 +110,51 @@ class ExtendedAffinePoint:
         """
         Returns the string representation of a point
         """
-        return f"({self._x}, {self._y})"
+        if self._is_infty:
+            return "(0 : 1 : 0)"
 
-a = 17
-b = 6
-q = 23
-F = GF(23)
-E = EllipticCurve(F, [17, 6])
+        return f"({self._x} : {self._y} : 1)"
 
-tests = [
-    ([10, 7], [7, 13]),
-]
 
-for P, Q in tests:
-    print(f'We have points {P} and {Q}')
-    P_E = E(P)
-    Q_E = E(Q)
-    R_E = P_E + Q_E
-    
-    P_affine = ExtendedAffinePoint(F(P[0]), F(P[1]), F(a), F(b))
-    Q_affine = ExtendedAffinePoint(F(Q[0]), F(Q[1]), F(a), F(b))
-    R_affine = P_affine + Q_affine
+if __name__ == '__main__':
+    a = 17
+    b = 6
+    q = 23
+    F = GF(23)
+    Z = IntegerRing()
+    E = EllipticCurve(F, [17, 6])
 
-    print(f'Got: P+Q={R_affine}, expected: P+Q={R_E}')
+    tests = [
+        ([10, 7], [7, 13]),
+    ]
 
-    double_P_E = 2*P_E
-    double_P_affine = P_affine + P_affine
-    print(f'Got: 2*P={double_P_affine}, expected: 2*P={double_P_E}')
+    for P, Q in tests:
+        print(f'We have points {P} and {Q}')
+        P_E = E(P)
+        Q_E = E(Q)
+        R_E = P_E + Q_E
+        
+        P_affine = ExtendedAffinePoint(F(P[0]), F(P[1]), F(a), F(b))
+        Q_affine = ExtendedAffinePoint(F(Q[0]), F(Q[1]), F(a), F(b))
+        R_affine = P_affine + Q_affine
+        if R_E == R_affine:
+            print('Hooray')
+        else:
+            print('maggot')
+        print(f'Got: P+Q={R_affine}, expected: P+Q={R_E}')
 
-    double_Q_E = 2*Q_E
-    double_Q_affine = Q_affine + Q_affine
-    print(f'Got: 2*Q={double_Q_affine}, expected: 2*Q={double_Q_E}')
+        double_P_E = 2*P_E
+        double_P_affine = P_affine + P_affine
+        print(f'Got: 2*P={double_P_affine}, expected: 2*P={double_P_E}')
+
+        double_Q_E = 2*Q_E
+        double_Q_affine = Q_affine + Q_affine
+        print(f'Got: 2*Q={double_Q_affine}, expected: 2*Q={double_Q_E}')
+
+        five_P_E = 5*P_E
+        five_P_affine = P_affine.mul(Z(15))
+        print(f'Got: 5*P={five_P_affine}, expected: 5*P={five_P_E}')
+
+        five_Q_E = 5*Q_E
+        five_Q_affine = Q_affine.mul(Z(15))
+        print(f'Got: 5*Q={five_Q_affine}, expected: 5*Q={five_Q_E}')
