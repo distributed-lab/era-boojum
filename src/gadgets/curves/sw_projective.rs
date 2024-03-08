@@ -7,6 +7,8 @@
 The code below is based on the following paper: https://eprint.iacr.org/2015/1060.pdf.
 */
 
+use crate::cs::traits::cs::ConstraintSystem;
+
 use super::{
     affine::ExtendedAffinePoint,
     boolean::Boolean,
@@ -14,7 +16,6 @@ use super::{
     traits::{group_point::EllipticGroupPoint, selectable::Selectable},
     Derivative, SmallField,
 };
-use crate::cs::traits::cs::ConstraintSystem;
 use pairing::{
     ff::{Field, PrimeField},
     GenericCurveAffine,
@@ -31,9 +32,9 @@ where
     NF: NonNativeField<F, GC::Base>,
     GC::Base: PrimeField,
 {
-    pub x: NF,
-    pub y: NF,
-    pub z: NF,
+    x: NF,
+    y: NF,
+    z: NF,
     pub _marker: PhantomData<(F, GC)>,
 }
 
@@ -149,7 +150,7 @@ where
     where
         CS: ConstraintSystem<F>,
     {
-        Self::new(cs, affine_point.x, affine_point.y)
+        Self::new(cs, affine_point.x().clone(), affine_point.y().clone())
     }
 
     /// Doubles the point in the SW projective coordinates, that is, finds the point `2 * self`.
@@ -336,6 +337,7 @@ where
     {
         let mut result = Self::infinity(cs, self.x.get_params());
         let mut temp = self.clone();
+
 
         // Convert the scalar to bits
         let scalar_bits = scalar

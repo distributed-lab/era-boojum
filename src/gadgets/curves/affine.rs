@@ -20,8 +20,8 @@ where
     NF: NonNativeField<F, GC::Base>,
     GC::Base: pairing::ff::PrimeField,
 {
-    pub x: NF,
-    pub y: NF,
+    x: NF,
+    y: NF,
     pub is_infinity: Boolean<F>,
     pub _marker: PhantomData<GC>,
 }
@@ -76,13 +76,15 @@ where
     where
         CS: ConstraintSystem<F>,
     {
+        // If x's are not the same, adding via unequal_x method
         let same_x = self.same_x(cs, other);
         let boolean_false = Boolean::allocated_constant(cs, false);
         if same_x == boolean_false {
             return self.add_unequal_x(cs, other);
         }
 
-        let same_y = self.same_y(cs, other);
+        // If y's are the same, doubling the point
+        let same_y = self.same_y(cs, other).negated(cs);
         if same_y == boolean_false {
             return self.double(cs);
         }
