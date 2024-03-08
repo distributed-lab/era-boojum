@@ -137,10 +137,6 @@ if __name__ == '__main__':
         P_affine = ExtendedAffinePoint(F(P[0]), F(P[1]), F(a), F(b))
         Q_affine = ExtendedAffinePoint(F(Q[0]), F(Q[1]), F(a), F(b))
         R_affine = P_affine + Q_affine
-        if R_E == R_affine:
-            print('Hooray')
-        else:
-            print('maggot')
         print(f'Got: P+Q={R_affine}, expected: P+Q={R_E}')
 
         double_P_E = 2*P_E
