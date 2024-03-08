@@ -277,3 +277,252 @@ where
         }
     }
 }
+
+// This is unfinished version, which does not yet compile.
+#[cfg(test)]
+mod tests {
+    use std::alloc::Global;
+
+    use super::*;
+    use crate::{
+        config::CSConfig,
+        cs::{
+            gates::{ConstantsAllocatorGate, FmaGateInBaseFieldWithoutConstant, NopGate},
+            implementations::pow::NoPow,
+            oracle::TreeHasher,
+            CircuitResolverOpts, CSGeometry,
+        },
+        field::goldilocks::GoldilocksField,
+        gadgets::{
+            non_native_field::{
+                ext_k_squared, ExtFqkCycField, ExtFqkField, ExtFqkFieldParams, ExtFqkFieldRoot,
+                ExtFieldElement,
+            },
+            traits::non_native_field::NonNativeField,
+        },
+        pairing::traits::elliptic_curve::GenericCurveAffine,
+        worker::Worker,
+    };
+
+    use crate::cs::traits::gate::GatePlacementStrategy;
+    use crate::gadgets::traits::witnessable::WitnessHookable;
+
+
+    type F = GoldilocksField;
+
+    const MAX_VARIABLES: usize = 1 << 20;
+    const MAX_TRACE_LEN: usize = 1 << 16;
+
+    fn configure_builder<
+        T: CsBuilderImpl<F, T>,
+        GC: GateConfigurationHolder<F>,
+        TB: StaticToolboxHolder,
+    >(
+        builder: CsBuilder<T, F, GC, TB>,
+    ) -> CsBuilder<T, F, impl GateConfigurationHolder<F>, impl StaticToolboxHolder> {
+        let builder = ConstantsAllocatorGate::configure_builder(
+            builder,
+            GatePlacementStrategy::UseGeneralPurposeColumns,
+        );
+        let builder = FmaGateInBaseFieldWithoutConstant::configure_builder(
+            builder,
+            GatePlacementStrategy::UseGeneralPurposeColumns,
+        );
+        let builder =
+            NopGate::configure_builder(builder, GatePlacementStrategy::UseGeneralPurposeColumns);
+
+        builder
+    }
+
+    fn setup_points<CS: ConstraintSystem<F>>(
+        cs: &mut CS,
+    ) -> (
+        ExtendedAffinePoint<F, ExtFqkCycField<F, 2, 2>, ExtFieldElement<F, 2, 2>>,
+        ExtendedAffinePoint<F, ExtFqkCycField<F, 2, 2>, ExtFieldElement<F, 2, 2>>,
+        ExtFqkField<F, 2, 2>,
+    ) {
+        let params = ExtFqkFieldParams::<F, 2, 2>::new();
+        let root = ExtFqkFieldRoot::<F, 2, 2>::new(params.clone());
+        let nf = ExtFqkField::<F, 2, 2>::new(params.clone());
+
+        let x1 = nf.allocate_checked(cs, root.to_representation());
+        let y1 = nf.allocate_checked(cs, root.to_representation().square());
+
+        let x2 = nf.allocate_checked(cs, root.to_representation().square());
+        let y2 = nf.allocate_checked(cs, root.to_representation().pow(4));
+
+        let p1 = ExtendedAffinePoint::<F, ExtFqkCycField<F, 2, 2>, ExtFieldElement<F, 2, 2>>::new(
+            cs, x1, y1,
+        );
+        let p2 = ExtendedAffinePoint::<F, ExtFqkCycField<F, 2, 2>, ExtFieldElement<F, 2, 2>>::new(
+            cs, x2, y2,
+        );
+
+        (p1, p2, nf)
+    }
+
+    #[test]
+    fn test_point_addition() {
+        let geometry = CSGeometry {
+            num_columns_under_copy_permutation: 20,
+            num_witness_columns: 0,
+            num_constant_columns: 4,
+            max_allowed_constraint_degree: 4,
+        };
+
+        use crate::config::DevCSConfig;
+        type RCfg = <DevCSConfig as CSConfig>::ResolverConfig;
+        
+        use crate::cs::cs_builder_reference::*;
+        let builder_impl =
+            CsReferenceImplementationBuilder::<F, F, DevCSConfig>::new(geometry, MAX_TRACE_LEN);
+       
+        use crate::cs::cs_builder::new_builder;
+        let builder = new_builder::<_, F>(builder_impl);
+
+        let builder = configure_builder(builder);
+        let mut owned_cs = builder.build(CircuitResolverOpts::new(MAX_VARIABLES));
+
+        let cs = &mut owned_cs;
+
+        let (mut p1, mut p2, nf) = setup_points(cs);
+
+        let p3 = p1.add(cs, &mut p2);
+        let params = nf.get_params();
+        let root = ExtFqkFieldRoot::<F, 2, 2>::new(params.clone());
+        let expected_x3 = nf.allocate_checked(cs, root.to_representation().pow(6));
+        let expected_y3 = nf.allocate_checked(cs, root.to_representation().pow(7));
+        assert!(p3.x.equals(cs, &expected_x3).unwrap());
+        assert!(p3.y.equals(cs, &expected_y3).unwrap());
+
+        drop(cs);
+        owned_cs.pad_and_shrink();
+        let mut owned_cs = owned_cs.into_assembly::<Global>();
+        let worker = Worker::new_with_num_threads(8);
+        assert!(owned_cs.check_if_satisfied(&worker));
+    }
+
+    #[test]
+    fn test_point_doubling() {
+        let geometry = CSGeometry {
+            num_columns_under_copy_permutation: 20,
+            num_witness_columns: 0,
+            num_constant_columns: 4,
+            max_allowed_constraint_degree: 4,
+        };
+
+        use crate::config::DevCSConfig;
+        type RCfg = <DevCSConfig as CSConfig>::ResolverConfig;
+        
+        use crate::cs::cs_builder_reference::*;
+        let builder_impl =
+            CsReferenceImplementationBuilder::<F, F, DevCSConfig>::new(geometry, MAX_TRACE_LEN);
+        
+        use crate::cs::cs_builder::new_builder;
+        let builder = new_builder::<_, F>(builder_impl);
+
+        let builder = configure_builder(builder);
+        let mut owned_cs = builder.build(CircuitResolverOpts::new(MAX_VARIABLES));
+
+        let cs = &mut owned_cs;
+
+        let (mut p1, _, nf) = setup_points(cs);
+
+        let p4 = p1.double(cs);
+        let params = nf.get_params();
+        let root = ExtFqkFieldRoot::<F, 2, 2>::new(params.clone());
+        let expected_x4 = nf.allocate_checked(cs, root.to_representation().pow(8));
+        let expected_y4 = nf.allocate_checked(cs, root.to_representation().pow(9));
+        assert!(p4.x.equals(cs, &expected_x4).unwrap());
+        assert!(p4.y.equals(cs, &expected_y4).unwrap());
+
+        drop(cs);
+        owned_cs.pad_and_shrink();
+        let mut owned_cs = owned_cs.into_assembly::<Global>();
+        let worker = Worker::new_with_num_threads(8);
+        assert!(owned_cs.check_if_satisfied(&worker));
+    }
+
+    #[test]
+    fn test_point_negation() {
+        let geometry = CSGeometry {
+            num_columns_under_copy_permutation: 20,
+            num_witness_columns: 0,
+            num_constant_columns: 4,
+            max_allowed_constraint_degree: 4,
+        };
+
+        use crate::config::DevCSConfig;
+        type RCfg = <DevCSConfig as CSConfig>::ResolverConfig;
+
+        use crate::cs::cs_builder_reference::*;
+        let builder_impl =
+            CsReferenceImplementationBuilder::<F, F, DevCSConfig>::new(geometry, MAX_TRACE_LEN);
+        
+        use crate::cs::cs_builder::new_builder;
+        let builder = new_builder::<_, F>(builder_impl);
+
+        let builder = configure_builder(builder);
+        let mut owned_cs = builder.build(CircuitResolverOpts::new(MAX_VARIABLES));
+
+        let cs = &mut owned_cs;
+
+        let (mut p1, _, nf) = setup_points(cs);
+
+        let p5 = p1.negate(cs);
+        let x1 = p1.x.clone();
+        let y1 = p1.y.clone();
+        let expected_x5 = x1;
+        let expected_y5 = y1.negated(cs);
+        assert!(p5.x.equals(cs, &expected_x5).unwrap());
+        assert!(p5.y.equals(cs, &expected_y5).unwrap());
+
+        drop(cs);
+        owned_cs.pad_and_shrink();
+        let mut owned_cs = owned_cs.into_assembly::<Global>();
+        let worker = Worker::new_with_num_threads(8);
+        assert!(owned_cs.check_if_satisfied(&worker));
+    }
+
+    #[test]
+    fn test_scalar_multiplication() {
+        let geometry = CSGeometry {
+            num_columns_under_copy_permutation: 20,
+            num_witness_columns: 0,
+            num_constant_columns: 4,
+            max_allowed_constraint_degree: 4,
+        };
+
+        use crate::config::DevCSConfig;
+        type RCfg = <DevCSConfig as CSConfig>::ResolverConfig;
+
+        use crate::cs::cs_builder_reference::*;
+        let builder_impl =
+            CsReferenceImplementationBuilder::<F, F, DevCSConfig>::new(geometry, MAX_TRACE_LEN);
+        
+        use crate::cs::cs_builder::new_builder;
+        let builder = new_builder::<_, F>(builder_impl);
+
+        let builder = configure_builder(builder);
+        let mut owned_cs = builder.build(CircuitResolverOpts::new(MAX_VARIABLES));
+
+        let cs = &mut owned_cs;
+
+        let (mut p1, _, nf) = setup_points(cs);
+
+        let scalar = GoldilocksField::from_u64_unchecked(42);
+        let p6 = p1.mul(cs, &scalar);
+        let params = nf.get_params();
+        let root = ExtFqkFieldRoot::<F, 2, 2>::new(params.clone());
+        let expected_x6 = nf.allocate_checked(cs, root.to_representation().pow(10));
+        let expected_y6 = nf.allocate_checked(cs, root.to_representation().pow(11));
+        assert!(p6.x.equals(cs, &expected_x6).unwrap());
+        assert!(p6.y.equals(cs, &expected_y6).unwrap());
+
+        drop(cs);
+        owned_cs.pad_and_shrink();
+        let mut owned_cs = owned_cs.into_assembly::<Global>();
+        let worker = Worker::new_with_num_threads(8);
+        assert!(owned_cs.check_if_satisfied(&worker));
+    }
+}
